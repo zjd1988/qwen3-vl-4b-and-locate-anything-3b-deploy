@@ -1,0 +1,4 @@
+# 构建上下文（本目录）裁剪：模型权重与 locate-anything.cpp 的构建产物不进入 context
+models/
+locate-anything.cpp/build
+locate-anything.cpp/models

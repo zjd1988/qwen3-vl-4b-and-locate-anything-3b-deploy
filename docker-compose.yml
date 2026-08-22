@@ -1,0 +1,125 @@
+# ==============================================================================
+# Qwen3-VL-4B-Instruct + LocateAnything-3B — Docker + GPU 部署编排（单镜像双服务）
+#
+# 用法:
+#   cd qwen3-vl-4b-locate-anything-3b-deploy
+#   bash scripts/start.sh --build               # 首次构建并启动
+#   docker compose logs -f                      # 查看日志
+#   curl http://<host>:8090/health              # qwen3-vl-4b (llama-server)
+#   curl http://<host>:8091/health              # locate-anything-3b (locate-anything-server)
+#   bash scripts/smoke-test.sh                  # 冒烟测试（VL 带图问答 + detect）
+#   bash scripts/parity-test.sh                 # CLI vs server 检测一致性测试
+#
+# 常用环境变量覆盖:
+#   GPU_ID=0|1         选卡（两个服务共用同一张卡；默认 0）
+#   VL_PORT=8090       qwen3-vl-4b 对外端口
+#   LOCATE_PORT=8091   locate-anything-3b 对外端口
+#   VL_CTX=32768       qwen3-vl 上下文长度（--fit on 不配 -c 会把 KV 撑到吃满整卡）
+#   MODELS_DIR=路径     模型权重目录（默认 ./models，即本部署目录下的 models/）
+#   LA_THREADS=4       locate-anything-server CPU 线程数（非 offload 部分）
+# ==============================================================================
+
+x-build: &build
+  context: .                                                     # 本部署目录（含 vendored locate-anything.cpp/ 源码）
+  dockerfile: Dockerfile
+  args:
+    LLAMA_CPP_COMMIT: 70aff25250075bf23b533c207b55168a4f926350  # llama.cpp commit（已支持 qwen3vl）
+    CUDA_ARCHS: "${CUDA_ARCHS:-70;75;80;86;89;90}"               # CUDA 架构（分号分隔；单卡可覆盖加速构建）
+
+x-gpu: &gpu
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          device_ids: ["${GPU_ID:-0}"]
+          capabilities: [gpu]
+
+x-common-env: &common-env
+  NVIDIA_VISIBLE_DEVICES: ${GPU_ID:-0}
+  NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+services:
+  # ---------- Qwen3-VL-4B-Instruct（llama-server，OpenAI 兼容） ----------
+  qwen3-vl:
+    build: *build
+    image: qwen3-vl-4b-locate-3b:latest
+    container_name: qwen3-vl-server
+    restart: unless-stopped
+    deploy: *gpu
+    environment: *common-env
+    volumes:
+      - "${MODELS_DIR:-./models}:/models:ro"
+    ports:
+      - "${VL_PORT:-8090}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    command:
+      - llama-server
+      - --model
+      - /models/qwen3-vl-4b/Qwen3-VL-4B-Instruct-Q8_0.gguf
+      - --mmproj
+      - /models/qwen3-vl-4b/mmproj-F16.gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --alias
+      - Qwen3-VL-4B-Instruct,qwen3-vl-4b
+      - --jinja
+      - --tools
+      - all
+      - --metrics
+      - --parallel
+      - "1"
+      - --flash-attn
+      - "on"
+      # 显式限定上下文：--fit on 默认会把上下文撑到吃满整张卡（24GB 卡上会规划出
+      # 26 万 token 的 KV，白白多占 12GB+ 显存）。VL_CTX 可按需调大。
+      - -c
+      - "${VL_CTX:-32768}"
+      - --fit
+      - "on"
+      - --fit-target
+      - "768"
+      - -b
+      - "2048"
+      - -ub
+      - "256"
+      - --cache-type-k
+      - q4_0
+      - --cache-type-v
+      - q4_0
+
+  # ---------- LocateAnything-3B（locate-anything-server，目标检测） ----------
+  locate-anything:
+    build: *build
+    image: qwen3-vl-4b-locate-3b:latest
+    container_name: locate-anything-server
+    restart: unless-stopped
+    deploy: *gpu
+    environment: *common-env
+    volumes:
+      - "${MODELS_DIR:-./models}:/models:ro"
+      - "./locate-anything.cpp/benchmarks/media:/media:ro"        # 测试图片（parity-test.sh 用）
+    ports:
+      - "${LOCATE_PORT:-8091}:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    command:
+      - locate-anything-server
+      - --model
+      - /models/locate-anything-3b/locate-anything-q8_0.gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8081"
+      - --threads
+      - "${LA_THREADS:-4}"

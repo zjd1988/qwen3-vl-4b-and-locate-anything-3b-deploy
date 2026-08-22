@@ -1,0 +1,5 @@
+# 本地构建产物与杂项（本目录计划纳入 GitHub 管理）
+models/
+locate-anything.cpp/build/
+__pycache__/
+*.pyc
