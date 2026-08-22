@@ -105,6 +105,7 @@ bash scripts/parity-test.sh     # 对 media 三张图比对容器内 CLI 与 ser
 qwen3-vl-4b-locate-anything-3b-deploy/
 ├── Dockerfile              # 单镜像多阶段：llama-server + locate-anything-server/-cli
 ├── docker-compose.yml      # 一个 image、两个 service
+├── LICENSE                 # 本仓库自身代码：MIT（上游组件许可证见下文 License 章节）
 ├── locate-anything.cpp/    # vendored 源码（含新增的 examples/server，即 HTTP server）
 │   └── benchmarks/media/   # 测试图片（smoke/parity 脚本与容器 /media 挂载使用）
 ├── models/                 # 模型权重（download-models.sh 下载；已被 .gitignore/.dockerignore 排除）
@@ -122,3 +123,28 @@ compose 的 `build.context` 即本目录，由本目录 `.dockerignore` 剔除
 `locate-anything.cpp/build` 等本地产物。llama.cpp 与 ggml 不随 context 打包，
 而是在构建期按固定 commit 从 GitHub 浅取（`Dockerfile` 中的 `LLAMA_CPP_COMMIT` /
 `GGML_COMMIT`），因此 context 仅约 36MB。
+
+## License（许可证）
+
+本仓库只包含部署编排（`Dockerfile`、`docker-compose.yml`、`scripts/`、README）与
+vendored 源码（`locate-anything.cpp/`、`third_party/cpp-httplib`），**不含模型权重**
+（`models/` 已被 `.gitignore` 排除，由 `scripts/download-models.sh` 下载）。
+权重与引擎的许可证由各上游项目单独授予，使用前请自行核对是否符合你的用途：
+
+| 组件 | 角色 | 许可证 | 来源 |
+| --- | --- | --- | --- |
+| llama.cpp | 推理引擎（构建为 llama-server，构建期浅取固定 commit） | **MIT** | © 2023-2026 The ggml authors，[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) |
+| ggml | locate-anything.cpp 的计算后端（构建期浅取固定 commit） | **MIT** | [ggml-org/ggml](https://github.com/ggml-org/ggml) |
+| locate-anything.cpp | 检测引擎（vendored，含本仓库新增的 `examples/server`） | **MIT** | © 2026 Ettore Di Giacinto / LocalAI team，[mudler/locate-anything.cpp](https://github.com/mudler/locate-anything.cpp) |
+| cpp-httplib | HTTP 库（vendored 单头文件，v0.53.1） | **MIT** | © Yuji Hirose，[yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) |
+| Qwen3-VL-4B-Instruct | 基座模型（`Qwen3-VL-4B-Instruct-Q8_0.gguf` + `mmproj-F16.gguf`） | **Apache-2.0** | [Qwen/Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)，GGUF 来自 [unsloth/Qwen3-VL-4B-Instruct-GGUF](https://modelscope.cn/models/unsloth/Qwen3-VL-4B-Instruct-GGUF)（GGUF 内 `general.license=apache-2.0`） |
+| LocateAnything-3B | 检测模型（`locate-anything-q8_0.gguf`） | **NVIDIA 许可证**（`nvidia-license`，非 OSI 标准许可证） | [nvidia/LocateAnything-3B](https://huggingface.co/nvidia/LocateAnything-3B)，GGUF 来自 [mudler/locate-anything.cpp-gguf](https://modelscope.cn/models/mudler/locate-anything.cpp-gguf)，商用前请阅读其 [LICENSE](https://huggingface.co/nvidia/LocateAnything-3B/blob/main/LICENSE) |
+| `nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04` | 基础镜像 | NVIDIA CUDA 软件许可（EULA）+ Ubuntu（Canonical 及 OSS 组件） | [NVIDIA NGC](https://hub.docker.com/r/nvidia/cuda) |
+
+说明：
+
+- **本仓库自身代码采用 MIT**（见根目录 `LICENSE`），与上游模型/引擎许可证相互独立。
+- **MIT**（llama.cpp / ggml / locate-anything.cpp / cpp-httplib）：宽松许可，允许商用/修改/分发，须保留版权与许可声明。
+- **Apache-2.0**（Qwen3-VL-4B 权重）：允许商用、修改、分发，重分发须附 LICENSE 与 NOTICE。
+- **NVIDIA 许可证**（LocateAnything-3B 权重）：条款以模型卡所附 LICENSE 为准，与 MIT/Apache 不同，再分发或商用前务必核对。
+- **基础镜像**：CUDA 组件受 NVIDIA 软件许可（EULA）约束；镜像内 Ubuntu 用户态组件遵循各自开源许可证。
