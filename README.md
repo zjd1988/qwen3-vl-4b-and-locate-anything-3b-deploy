@@ -105,6 +105,8 @@ bash scripts/parity-test.sh     # 对 media 三张图比对容器内 CLI 与 ser
 qwen3-vl-4b-locate-anything-3b-deploy/
 ├── Dockerfile              # 单镜像多阶段：llama-server + locate-anything-server/-cli
 ├── docker-compose.yml      # 一个 image、两个 service
+├── detect-pipeline/        # 安全检测流水线（宿主机运行）：YOLO-World 小模型检测人形
+│                           # + Qwen3-VL 大模型判定吸烟/安全帽/反光衣，详见其 README
 ├── LICENSE                 # 本仓库自身代码：MIT（上游组件许可证见下文 License 章节）
 ├── locate-anything.cpp/    # vendored 源码（含新增的 examples/server，即 HTTP server）
 │   └── benchmarks/media/   # 测试图片（smoke/parity 脚本与容器 /media 挂载使用）

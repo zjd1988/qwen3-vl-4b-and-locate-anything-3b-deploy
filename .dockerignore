@@ -2,3 +2,8 @@
 models/
 locate-anything.cpp/build
 locate-anything.cpp/models
+# 本地环境/产物不打进 context（.venv 约 4GB、test.mp4 约 400MB、outputs 为运行产物）
+.venv/
+outputs/
+test.mp4
+.git/

@@ -1,0 +1,10 @@
+# 安全检测流水线 Python 依赖（Python 3.10）
+# 小模型侧：ultralytics YOLO-World（首次加载会自动从 GitHub 安装 CLIP）
+# 大模型侧：仅需 requests 访问 Qwen3-VL 的 OpenAI 兼容接口
+torch==2.7.0                # cu126 wheel 支持 sm_75（RTX 2080 Ti）
+torchvision==0.22.0         # 与 torch 2.7.0 配套
+ultralytics==8.4.184
+opencv-python-headless==5.0.0.93
+numpy>=1.23
+requests>=2.23
+edge-tts>=7.0               # 可选：告警语音生成（输出 mp3，aplay 播放需 wav，必要时用 ffmpeg 转换）
