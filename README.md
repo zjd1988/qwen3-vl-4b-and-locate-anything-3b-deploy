@@ -1,64 +1,49 @@
 # Qwen3-VL-4B + LocateAnything-3B 多模态部署
 
-单个 Docker 镜像、两个推理服务：
+单个 Docker 镜像、两个推理服务，外加一个宿主机安全检测流水线（大小模型结合）：
 
-| 服务 | 二进制 | 模型 | 容器端口 | 宿主默认端口 |
-| ---- | ------ | ---- | -------- | ------------ |
-| `qwen3-vl` | `llama-server`（llama.cpp @ `70aff25`，OpenAI 兼容） | `models/qwen3-vl-4b/Qwen3-VL-4B-Instruct-Q8_0.gguf` + `mmproj-F16.gguf` | 8080 | 8090（`VL_PORT`） |
-| `locate-anything` | `locate-anything-server`（locate-anything.cpp，新增 HTTP 前端） | `models/locate-anything-3b/locate-anything-q8_0.gguf` | 8081 | 8091（`LOCATE_PORT`） |
+| 组件 | 二进制/脚本 | 模型 | 宿主端口 |
+| --- | --- | --- | --- |
+| `qwen3-vl` | `llama-server`（llama.cpp，OpenAI 兼容） | `Qwen3-VL-4B-Instruct-Q8_0.gguf` + `mmproj-F16.gguf` | 8090 |
+| `locate-anything` | `locate-anything-server` | `locate-anything-q8_0.gguf` | 8091 |
+| `detect-pipeline/` | `yoloworld_vlm_safety.py` / `locate_vlm_safety.py` | YOLO-World 或 LocateAnything 检测人形 + Qwen3-VL 判定吸烟/安全帽/反光衣 | —（宿主机运行） |
 
-- 镜像：`qwen3-vl-4b-locate-3b:latest`，多阶段构建（`Dockerfile`），默认多 CUDA 架构（`CUDA_ARCHS=70;75;80;86;89;90`，可覆盖如 `86` 加速构建）。
-- 模型通过 volume 只读挂载（默认 `./models`，即本部署目录内），不打进镜像。
-- 两个服务默认共用 `GPU_ID=0`；RTX 3090 24GB 可同时容纳两者（VL Q8_0 ≈4.5GB + mmproj 0.8GB + KV，locate q8_0 ≈3GB）。
+- 镜像 `qwen3-vl-4b-locate-3b:latest` 多阶段构建（`Dockerfile`，默认多 CUDA 架构，可用 `CUDA_ARCHS` 覆盖加速，如单卡 `75`）。
+- 模型通过 volume 只读挂载（默认 `./models`），不打进镜像。
+- 开发与运维细节（构建注意事项、网络镜像、验证方法等）见 [`AGENTS.md`](AGENTS.md)。
 
 ## 前置条件
 
-- NVIDIA 驱动 + nvidia-container-toolkit；Docker（含 compose 插件）。
-- 模型文件（可用脚本一键下载，需 `pip install modelscope`，可按目标分别下载）：
+- NVIDIA 驱动 + nvidia-container-toolkit；Docker。
+- 模型权重（需 `pip install modelscope`，支持断点续传，也可按目标分别下载）：
 
   ```bash
-  bash scripts/download-models.sh                    # 全部 → ./models/（支持断点续传）
+  bash scripts/download-models.sh                    # 全部 → ./models/
   bash scripts/download-models.sh qwen3-vl           # 只下 VL 模型 + mmproj
   bash scripts/download-models.sh locate-anything    # 只下 locate 模型
   ```
 
-  等价于：
-
-  ```bash
-  modelscope download --model unsloth/Qwen3-VL-4B-Instruct-GGUF \
-      Qwen3-VL-4B-Instruct-Q8_0.gguf mmproj-F16.gguf --local_dir ./models/qwen3-vl-4b
-  modelscope download --model mudler/locate-anything.cpp-gguf \
-      locate-anything-q8_0.gguf --local_dir ./models/locate-anything-3b
-  ```
-
-  目标文件：
-  - `models/qwen3-vl-4b/Qwen3-VL-4B-Instruct-Q8_0.gguf`
-  - `models/qwen3-vl-4b/mmproj-F16.gguf`
-  - `models/locate-anything-3b/locate-anything-q8_0.gguf`
-- 构建期需要访问 GitHub（浅取 llama.cpp 与 ggml 的固定 commit）。
+- 构建期需要访问 GitHub（浅取 llama.cpp 与 ggml 固定 commit）。
 
 ## 启动 / 停止
 
 ```bash
-bash scripts/start.sh --build     # 首次：构建镜像并启动（CUDA 编译约 20–80 分钟）
-bash scripts/start.sh             # 之后：直接启动全部服务
-bash scripts/start.sh --service qwen3-vl         # 只启动 VL 服务（别名 vl）
-bash scripts/start.sh --service locate-anything  # 只启动检测服务（别名 locate）
-bash scripts/start.sh --smoke     # 启动后自动冒烟（只测本次启动的服务）
-docker compose down               # 停止
-docker compose logs -f            # 日志
+bash scripts/start.sh --build                 # 首次：构建镜像并启动全部服务（CUDA 编译约 20–80 分钟）
+bash scripts/start.sh                         # 之后：直接启动
+bash scripts/start.sh --service qwen3-vl      # 只启动 VL 服务（别名 vl）
+bash scripts/start.sh --service locate-anything
+bash scripts/start.sh --smoke                 # 启动后自动冒烟
+docker compose down                           # 停止
+docker compose logs -f                        # 日志
 ```
 
-可选覆盖：`GPU_ID=1 VL_PORT=9090 LOCATE_PORT=9091 MODELS_DIR=/path/models VL_CTX=65536 bash scripts/start.sh`。
+可选覆盖：`GPU_ID=1 VL_PORT=9090 LOCATE_PORT=9091 MODELS_DIR=/path/models VL_CTX=65536 CUDA_ARCHS=75`。
 
-> 显存说明：`qwen3-vl` 显式限定 `-c 32768`（`VL_CTX` 可调）。llama-server 的 `--fit on`
-> 若不配 `-c` 会把上下文撑到吃满整张卡——24GB 卡上曾规划出 26 万 token 的 KV，
-> 权重 4.7GB 的模型实测占到 17GB。限定 32k 后 VL 服务约 7GB、locate 服务约 6.5GB，
-> 两服务合计约 13.5GB，一张 24GB 卡还可余出空间跑 `parity-test.sh` 的 CLI 基准。
+> 本机无 compose 插件时，用 `docker run` 等价命令（见 AGENTS.md「常用命令」）。
 
 ## API
 
-### Qwen3-VL-4B（llama-server，OpenAI 兼容）
+### Qwen3-VL（llama-server，OpenAI 兼容）
 
 ```bash
 curl http://127.0.0.1:8090/v1/chat/completions -H 'Content-Type: application/json' -d '{
@@ -70,34 +55,29 @@ curl http://127.0.0.1:8090/v1/chat/completions -H 'Content-Type: application/jso
 }'
 ```
 
-### LocateAnything-3B（locate-anything-server）
+### LocateAnything（locate-anything-server）
 
 ```bash
-curl http://127.0.0.1:8091/health
-# {"status":"ok"}
+curl http://127.0.0.1:8091/health        # {"status":"ok"}
 
 curl http://127.0.0.1:8091/v1/detect \
   -F image=@street.jpg \
   -F 'prompt=Locate all the instances that matches the following description: person</c>car.' \
   -F mode=hybrid
-# {"detections":[{"label":"person","box":[x1,y1,x2,y2]}, ...],
-#  "prompt":"...", "mode":"hybrid", "image":{"width":W,"height":H}, "elapsed_ms":N}
+# {"detections":[{"label":"person","box":[x1,y1,x2,y2]}, ...]}
 ```
 
-- 也接受 JSON：`{"image_base64": "...", "prompt": "...", "mode": "hybrid", "max_new": 256}`。
-- `mode`：`hybrid`（默认，Parallel Box Decoding + AR 回退）/ `slow`（纯自回归）/ `fast`（仅 MTP）。
-- **限制**：引擎有状态，推理请求经互斥锁串行执行，不支持并发；`box` 为原图像素坐标。
-- 服务端实现：`locate-anything.cpp/examples/server/main.cpp`（cpp-httplib，vendored 于 `third_party/cpp-httplib`）。
+- 也接受 JSON：`{"image_base64": "...", "prompt": "...", "mode": "hybrid", "max_new": 256}`；`mode`：`hybrid`（默认）/ `slow` / `fast`。
+- **限制**：引擎有状态，推理请求互斥串行，不支持并发；`box` 为原图像素坐标；超大图会撑爆显存，客户端需限制送图边长（见 AGENTS.md）。
 
 ## 测试
 
 ```bash
-bash scripts/smoke-test.sh      # VL 带图问答 + locate detect 冒烟（用 benchmarks/media/bus_in.png）
-bash scripts/parity-test.sh     # 对 media 三张图比对容器内 CLI 与 server 输出（应逐位一致），并覆盖 slow/fast
+bash scripts/smoke-test.sh     # VL 带图问答 + locate detect 冒烟
+bash scripts/parity-test.sh    # 容器内 CLI 与 server 输出逐位一致性 + slow/fast 覆盖
 ```
 
-两个脚本默认连 `127.0.0.1:8090/8091`，可传参覆盖；`MEDIA_DIR` 可替换测试图片目录
-（默认 `../locate-anything.cpp/benchmarks/media`）。
+两脚本默认连 `127.0.0.1:8090/8091`，可传参覆盖；`MEDIA_DIR` 可换测试图片目录。
 
 ## 目录结构
 
@@ -105,48 +85,26 @@ bash scripts/parity-test.sh     # 对 media 三张图比对容器内 CLI 与 ser
 qwen3-vl-4b-locate-anything-3b-deploy/
 ├── Dockerfile              # 单镜像多阶段：llama-server + locate-anything-server/-cli
 ├── docker-compose.yml      # 一个 image、两个 service
-├── detect-pipeline/        # 安全检测流水线（宿主机运行）：YOLO-World 小模型检测人形
-│                           # + Qwen3-VL 大模型判定吸烟/安全帽/反光衣，详见其 README
-├── LICENSE                 # 本仓库自身代码：MIT（上游组件许可证见下文 License 章节）
-├── locate-anything.cpp/    # vendored 源码（含新增的 examples/server，即 HTTP server）
+├── AGENTS.md               # 开发/运维指南（构建、网络镜像、验证方法、已知坑）
+├── detect-pipeline/        # 安全检测流水线（宿主机）：小模型检测 + VLM 判定
+│   ├── yoloworld_vlm_safety.py   # YOLO-World 版（本地实时）
+│   ├── locate_vlm_safety.py      # LocateAnything 版（开放式类别）
+│   ├── requirements.txt
+│   └── README.md                 # 流水线部署/配置/排障
+├── LICENSE                 # 本仓库自身代码：MIT
+├── locate-anything.cpp/    # vendored 源码（含新增的 examples/server）
 │   └── benchmarks/media/   # 测试图片（smoke/parity 脚本与容器 /media 挂载使用）
-├── models/                 # 模型权重（download-models.sh 下载；已被 .gitignore/.dockerignore 排除）
+├── models/                 # 模型权重（download-models.sh 下载；已被 gitignore/dockerignore 排除）
 └── scripts/                # download-models.sh / start.sh / smoke-test.sh / parity-test.sh
 ```
 
-`locate-anything.cpp/` 是上游 [mudler/locate-anything.cpp](https://github.com/mudler/locate-anything.cpp)
-的 vendored 副本（剔除 `.git`、`build/`、`models/`；`third_party/ggml` 为完整源码），新增的
-`examples/server`（`locate-anything-server`）就在其中。本目录整体可纳入 GitHub 管理
-（`.gitignore` 已排除本地构建产物）。
+## License
 
-## 构建上下文的说明
+本仓库自身代码采用 **MIT**（见根目录 `LICENSE`）；权重与引擎由各上游项目单独授权：
 
-compose 的 `build.context` 即本目录，由本目录 `.dockerignore` 剔除
-`locate-anything.cpp/build` 等本地产物。llama.cpp 与 ggml 不随 context 打包，
-而是在构建期按固定 commit 从 GitHub 浅取（`Dockerfile` 中的 `LLAMA_CPP_COMMIT` /
-`GGML_COMMIT`），因此 context 仅约 36MB。
-
-## License（许可证）
-
-本仓库只包含部署编排（`Dockerfile`、`docker-compose.yml`、`scripts/`、README）与
-vendored 源码（`locate-anything.cpp/`、`third_party/cpp-httplib`），**不含模型权重**
-（`models/` 已被 `.gitignore` 排除，由 `scripts/download-models.sh` 下载）。
-权重与引擎的许可证由各上游项目单独授予，使用前请自行核对是否符合你的用途：
-
-| 组件 | 角色 | 许可证 | 来源 |
-| --- | --- | --- | --- |
-| llama.cpp | 推理引擎（构建为 llama-server，构建期浅取固定 commit） | **MIT** | © 2023-2026 The ggml authors，[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) |
-| ggml | locate-anything.cpp 的计算后端（构建期浅取固定 commit） | **MIT** | [ggml-org/ggml](https://github.com/ggml-org/ggml) |
-| locate-anything.cpp | 检测引擎（vendored，含本仓库新增的 `examples/server`） | **MIT** | © 2026 Ettore Di Giacinto / LocalAI team，[mudler/locate-anything.cpp](https://github.com/mudler/locate-anything.cpp) |
-| cpp-httplib | HTTP 库（vendored 单头文件，v0.53.1） | **MIT** | © Yuji Hirose，[yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) |
-| Qwen3-VL-4B-Instruct | 基座模型（`Qwen3-VL-4B-Instruct-Q8_0.gguf` + `mmproj-F16.gguf`） | **Apache-2.0** | [Qwen/Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)，GGUF 来自 [unsloth/Qwen3-VL-4B-Instruct-GGUF](https://modelscope.cn/models/unsloth/Qwen3-VL-4B-Instruct-GGUF)（GGUF 内 `general.license=apache-2.0`） |
-| LocateAnything-3B | 检测模型（`locate-anything-q8_0.gguf`） | **NVIDIA 许可证**（`nvidia-license`，非 OSI 标准许可证） | [nvidia/LocateAnything-3B](https://huggingface.co/nvidia/LocateAnything-3B)，GGUF 来自 [mudler/locate-anything.cpp-gguf](https://modelscope.cn/models/mudler/locate-anything.cpp-gguf)，商用前请阅读其 [LICENSE](https://huggingface.co/nvidia/LocateAnything-3B/blob/main/LICENSE) |
-| `nvidia/cuda:12.6.3-cudnn-devel-ubuntu24.04` | 基础镜像 | NVIDIA CUDA 软件许可（EULA）+ Ubuntu（Canonical 及 OSS 组件） | [NVIDIA NGC](https://hub.docker.com/r/nvidia/cuda) |
-
-说明：
-
-- **本仓库自身代码采用 MIT**（见根目录 `LICENSE`），与上游模型/引擎许可证相互独立。
-- **MIT**（llama.cpp / ggml / locate-anything.cpp / cpp-httplib）：宽松许可，允许商用/修改/分发，须保留版权与许可声明。
-- **Apache-2.0**（Qwen3-VL-4B 权重）：允许商用、修改、分发，重分发须附 LICENSE 与 NOTICE。
-- **NVIDIA 许可证**（LocateAnything-3B 权重）：条款以模型卡所附 LICENSE 为准，与 MIT/Apache 不同，再分发或商用前务必核对。
-- **基础镜像**：CUDA 组件受 NVIDIA 软件许可（EULA）约束；镜像内 Ubuntu 用户态组件遵循各自开源许可证。
+| 组件 | 许可证 |
+| --- | --- |
+| llama.cpp / ggml / locate-anything.cpp / cpp-httplib | MIT |
+| Qwen3-VL-4B-Instruct 权重 | Apache-2.0 |
+| LocateAnything-3B 权重 | NVIDIA 许可证（非 OSI 标准，商用前请阅读其 LICENSE） |
+| nvidia/cuda 基础镜像 | NVIDIA CUDA EULA + Ubuntu 组件各自许可证 |
